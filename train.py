@@ -46,7 +46,7 @@ if __name__ == "__main__":
     for ep in trange(cfg.epoch, position=0):
         loss_ep = []
         iters = len(ds.train)
-        for n_iter, (samples, _) in enumerate(tqdm(ds.train, position=1)):
+        for n_iter, (samples, _) in enumerate(tqdm(ds.train, position=1, ascii=True)):
             if lr_warmup < 500:
                 lr_scale = (lr_warmup + 1) / 500
                 for pg in optimizer.param_groups:
