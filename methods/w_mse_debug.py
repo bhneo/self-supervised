@@ -3,9 +3,9 @@ import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 
 import cfg, methods, datasets
-from whitening import Whitening2d
-from base import BaseMethod
-from norm_mse import norm_mse_loss
+from methods.whitening import Whitening2d
+from methods.base import BaseMethod
+from methods.norm_mse import norm_mse_loss
 
 
 
