@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from .whitening import Whitening2d
+from .whitening import Whitening2d, Whitening2dIterNorm
 from .base import BaseMethod
 from .norm_mse import norm_mse_loss
 
@@ -11,7 +11,10 @@ class WMSE(BaseMethod):
     def __init__(self, cfg):
         """ init whitening transform """
         super().__init__(cfg)
-        self.whitening = Whitening2d(cfg.emb, eps=cfg.w_eps, track_running_stats=False)
+        if cfg.whiten == 'itn':
+            self.whitening = Whitening2dIterNorm(cfg.emb, eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter)
+        else:
+            self.whitening = Whitening2d(cfg.emb, eps=cfg.w_eps, track_running_stats=False)
         self.loss_f = norm_mse_loss if cfg.norm else F.mse_loss
         self.w_iter = cfg.w_iter
         self.w_size = cfg.bs if cfg.w_size is None else cfg.w_size

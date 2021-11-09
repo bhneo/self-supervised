@@ -64,18 +64,12 @@ class Whitening2d(nn.Module):
 
 
 class Whitening2dIterNorm(Whitening2d):
-    def __init__(self, num_features, momentum=0.01, track_running_stats=True, eps=0):
-        super(Whitening2d, self).__init__()
-        self.num_features = num_features
-        self.momentum = momentum
-        self.track_running_stats = track_running_stats
-        self.eps = eps
-
-        if self.track_running_stats:
-            self.register_buffer(
-                "running_mean", torch.zeros([1, self.num_features, 1, 1])
-            )
-            self.register_buffer("running_variance", torch.eye(self.num_features))
+    def __init__(self, num_features, momentum=0.01, track_running_stats=True, eps=0, iterations=5):
+        super(Whitening2dIterNorm, self).__init__(num_features,
+                                                  momentum,
+                                                  track_running_stats,
+                                                  eps)
+        self.iterations = iterations
 
     def forward(self, x):
         x = x.unsqueeze(2).unsqueeze(3) # [128, 64, 1, 1]
@@ -92,16 +86,21 @@ class Whitening2dIterNorm(Whitening2d):
         if not self.training and self.track_running_stats:  # for inference
             f_cov = self.running_variance
 
-        f_cov_shrinked = (1 - self.eps) * f_cov + self.eps * eye
+        sigma = (1 - self.eps) * f_cov + self.eps * eye
 
-        inv_sqrt = torch.triangular_solve(
-            eye, torch.cholesky(f_cov_shrinked), upper=False
-        )[0]
-        inv_sqrt = inv_sqrt.contiguous().view(
+        trace = sigma.trace().view(1, 1)
+        sigma_norm = sigma * trace.reciprocal()
+
+        projection = eye
+        for k in range(self.iterations):
+            projection = torch.baddbmm(1.5, projection, -0.5, torch.matrix_power(projection, 3), sigma_norm)
+        wm = projection.mul_(trace.reciprocal().sqrt())
+
+        wm = wm.reshape(
             self.num_features, self.num_features, 1, 1
         )
 
-        decorrelated = conv2d(xn, inv_sqrt) # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
+        decorrelated = conv2d(xn, wm) # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
 
         if self.training and self.track_running_stats:
             self.running_mean = torch.add(

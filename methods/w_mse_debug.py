@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 
 import cfg, methods, datasets
-from methods.whitening import Whitening2d
+from methods.whitening import Whitening2d, Whitening2dIterNorm
 from methods.base import BaseMethod
 from methods.norm_mse import norm_mse_loss
 
@@ -15,7 +15,10 @@ class WMSE(BaseMethod):
     def __init__(self, cfg):
         """ init whitening transform """
         super().__init__(cfg)
-        self.whitening = Whitening2d(cfg.emb, eps=cfg.w_eps, track_running_stats=False)
+        if cfg.whiten == 'itn':
+            self.whitening = Whitening2dIterNorm(cfg.emb, eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter)
+        else:
+            self.whitening = Whitening2d(cfg.emb, eps=cfg.w_eps, track_running_stats=False)
         self.loss_f = norm_mse_loss if cfg.norm else F.mse_loss
         self.w_iter = cfg.w_iter
         self.w_size = cfg.bs if cfg.w_size is None else cfg.w_size
@@ -42,6 +45,7 @@ class WMSE(BaseMethod):
 
 if __name__ == "__main__":
     conf = cfg.get_cfg()
+    conf.whiten = 'itn'
 
     ds = datasets.get_ds(conf.dataset)(conf.bs, conf, conf.num_workers)
     model = methods.get_method(conf.method)(conf)

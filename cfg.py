@@ -148,5 +148,6 @@ def get_cfg():
     parser.add_argument(
         "--eval_head", action="store_true", help="eval head output instead of model",
     )
-    parser.add_argument("--imagenet_path", type=str, default="~/IN100/")
+    parser.add_argument("--whiten", type=str, default="")
+    parser.add_argument("--iter", type=int, default=5)
     return parser.parse_args()
