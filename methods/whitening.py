@@ -88,10 +88,10 @@ class Whitening2dIterNorm(Whitening2d):
 
         sigma = (1 - self.eps) * f_cov + self.eps * eye
 
-        trace = sigma.trace().view(1, 1)
-        sigma_norm = sigma * trace.reciprocal()
+        trace = sigma.trace().reshape(1, 1, 1)
+        sigma_norm = sigma.reshape(1, self.num_features, self.num_features) * trace.reciprocal()
 
-        projection = eye
+        projection = eye.reshape(1, self.num_features, self.num_features)
         for k in range(self.iterations):
             projection = torch.baddbmm(1.5, projection, -0.5, torch.matrix_power(projection, 3), sigma_norm)
         wm = projection.mul_(trace.reciprocal().sqrt())
