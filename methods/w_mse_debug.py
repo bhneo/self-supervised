@@ -16,7 +16,7 @@ class WMSE(BaseMethod):
         """ init whitening transform """
         super().__init__(cfg)
         if cfg.whiten == 'itn':
-            self.whitening = Whitening2dIterNorm(cfg.emb, eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter)
+            self.whitening = Whitening2dIterNorm(cfg.emb, eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter, dim=cfg.w_dim)
         else:
             self.whitening = Whitening2d(cfg.emb, eps=cfg.w_eps, track_running_stats=False)
         self.loss_f = norm_mse_loss if cfg.norm else F.mse_loss
@@ -45,7 +45,8 @@ class WMSE(BaseMethod):
 
 if __name__ == "__main__":
     conf = cfg.get_cfg()
-    conf.whiten = 'itn'
+    # conf.whiten = 'itn'
+    conf.w_dim = 0
 
     ds = datasets.get_ds(conf.dataset)(conf.bs, conf, conf.num_workers)
     model = methods.get_method(conf.method)(conf)

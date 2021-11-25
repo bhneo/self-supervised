@@ -150,4 +150,6 @@ def get_cfg():
     )
     parser.add_argument("--whiten", type=str, default="")
     parser.add_argument("--iter", type=int, default=5)
+    parser.add_argument("--w_dim", type=int, default=0)
+
     return parser.parse_args()
