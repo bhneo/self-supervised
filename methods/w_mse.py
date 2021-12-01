@@ -12,27 +12,27 @@ class WMSE(BaseMethod):
         """ init whitening transform """
         super().__init__(cfg)
         if cfg.whiten == 'itn':
-            self.whitening = Whitening2dIterNorm(cfg.emb, eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter, dim=cfg.w_dim)
+            self.whitening = Whitening2dIterNorm(eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter, axis=cfg.w_dim)
         elif cfg.whiten == 'zca':
-            self.whitening = Whitening2dZCA(cfg.emb, eps=cfg.w_eps, track_running_stats=False, dim=cfg.w_dim)
+            self.whitening = Whitening2dZCA(eps=cfg.w_eps, track_running_stats=False, axis=cfg.w_dim)
         elif cfg.whiten == 'pca':
-            self.whitening = Whitening2dPCA(cfg.emb, eps=cfg.w_eps, track_running_stats=False, dim=cfg.w_dim)
+            self.whitening = Whitening2dPCA(eps=cfg.w_eps, track_running_stats=False, axis=cfg.w_dim)
         elif cfg.whiten == 'qa':
-            self.whitening = Whitening2dCholesky(cfg.emb, eps=cfg.w_eps, track_running_stats=False, dim=cfg.w_dim)
+            self.whitening = Whitening2dCholesky(eps=cfg.w_eps, track_running_stats=False, axis=cfg.w_dim)
         self.loss_f = norm_mse_loss if cfg.norm else F.mse_loss
         self.w_iter = cfg.w_iter
         self.w_size = cfg.bs if cfg.w_size is None else cfg.w_size
 
-    def forward(self, samples):
-        bs = len(samples[0])
+    def forward(self, samples):  # [512, 3, 32, 32] [512, 3, 32, 32]
+        bs = len(samples[0])  # 512
         h = [self.model(x.cuda(non_blocking=True)) for x in samples]
-        h = self.head(torch.cat(h))
+        h = self.head(torch.cat(h))  # [1024, 64]
         loss = 0
         for _ in range(self.w_iter):
             z = torch.empty_like(h)
-            perm = torch.randperm(bs).view(-1, self.w_size)
-            for idx in perm:
-                for i in range(len(samples)):
+            perm = torch.randperm(bs).view(-1, self.w_size)  # [4, 128] 相当于分成4组做白化
+            for idx in perm:  # idx 4组索引，每组128个
+                for i in range(len(samples)):  # i -> [0, 1] 分别对变体1和变体2座白化
                     z[idx + i * bs] = self.whitening(h[idx + i * bs])
             for i in range(len(samples) - 1):
                 for j in range(i + 1, len(samples)):
