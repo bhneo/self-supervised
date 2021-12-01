@@ -21,9 +21,9 @@ class Whitening2d(nn.Module):
             self.register_buffer("running_variance", torch.eye(self.num_features))
 
     def forward(self, x):
-        conv_dim = x.size(0) if self.dim == 1 else self.num_features
+        sigma_dim = x.size(0) if self.dim == 1 else self.num_features
         m = x.mean(self.dim)
-        m = m.view(conv_dim, -1) if self.dim == 1 else m.view(-1, conv_dim)
+        m = m.view(sigma_dim, -1) if self.dim == 1 else m.view(-1, sigma_dim)
         if not self.training and self.track_running_stats and self.dim==0:  # for inference
             m = self.running_mean
         xn = x - m  # [128, 64]
@@ -31,14 +31,23 @@ class Whitening2d(nn.Module):
         T = xn if self.dim == 1 else xn.permute(1, 0)  # [128, 64] / [64, 128]
         f_cov = torch.mm(T, T.permute(1, 0)) / (T.shape[-1] - 1)  # [128, 128] / [64, 64]
 
-        eye = torch.eye(conv_dim).type(f_cov.type())  # [128, 128] / [64, 64]
+        eye = torch.eye(sigma_dim).type(f_cov.type())  # [128, 128] / [64, 64]
 
         if not self.training and self.track_running_stats:  # for inference
             f_cov = self.running_variance
 
         sigma = (1 - self.eps) * f_cov + self.eps * eye
 
-        decorrelated = self.whiten(xn.unsqueeze(2).unsqueeze(3), sigma, eye, conv_dim)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
+        wm = self.whiten_matrix(sigma, eye, sigma_dim)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
+        wm = wm.reshape(sigma_dim, sigma_dim, 1, 1)
+
+        if self.dim == 1:
+            xn = xn.permute(1, 0).reshape(-1, sigma_dim, 1, 1)
+            decorrelated = conv2d(xn, wm)  # [64,128,1,1] [128,128,1,1] -> [64,128,1,1]
+            decorrelated = decorrelated.permute(1, 0, 2, 3)  # -> [128,64,1,1]
+        else:
+            xn = xn.reshape(-1, sigma_dim, 1, 1)
+            decorrelated = conv2d(xn, wm)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
 
         if self.training and self.track_running_stats and self.dim==0:
             self.running_mean = torch.add(
@@ -55,7 +64,7 @@ class Whitening2d(nn.Module):
         return decorrelated.squeeze(2).squeeze(2)
 
     @abc.abstractmethod
-    def whiten(self, x, sigma, eye, dim):
+    def whiten_matrix(self, sigma, eye, dim):
         pass
 
     def extra_repr(self):
@@ -65,16 +74,27 @@ class Whitening2d(nn.Module):
 
 
 class Whitening2dCholesky(Whitening2d):
-    def whiten(self, x, sigma, eye, dim):
-        inv_sqrt = torch.triangular_solve(
+    def whiten_matrix(self, sigma, eye, dim):  # x [128,64,1,1]
+        wm = torch.triangular_solve(
             eye, torch.cholesky(sigma), upper=False
         )[0]
-        inv_sqrt = inv_sqrt.contiguous().view(
-            dim, dim, 1, 1
-        )
+        return wm
 
-        decorrelated = conv2d(x, inv_sqrt)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
-        return decorrelated
+
+class Whitening2dZCA(Whitening2d):
+    def whiten_matrix(self, sigma, eye, dim):
+        u, eig, _ = sigma.svd()
+        scale = eig.rsqrt()
+        wm = u.matmul(scale.diag()).matmul(u.t())
+        return wm
+
+
+class Whitening2dPCA(Whitening2d):
+    def whiten_matrix(self, sigma, eye, dim):
+        u, eig, _ = sigma.svd()
+        scale = eig.rsqrt()
+        wm = u.matmul(scale.diag())
+        return wm
 
 
 class Whitening2dIterNorm(Whitening2d):
@@ -86,7 +106,7 @@ class Whitening2dIterNorm(Whitening2d):
                                                   dim)
         self.iterations = iterations
 
-    def whiten(self, x, sigma, eye, dim):
+    def whiten_matrix(self, sigma, eye, dim):
         trace = sigma.trace().reshape(1, 1, 1)
         sigma_norm = sigma.reshape(1, dim, dim) * trace.reciprocal()
 
@@ -94,17 +114,7 @@ class Whitening2dIterNorm(Whitening2d):
         for k in range(self.iterations):
             projection = torch.baddbmm(1.5, projection, -0.5, torch.matrix_power(projection, 3), sigma_norm)
         wm = projection.mul_(trace.reciprocal().sqrt())
-
-        wm = wm.reshape(dim, dim, 1, 1)
-
-        if self.dim == 1:
-            x = x.permute(1, 0).reshape(-1, dim, 1, 1)
-            decorrelated = conv2d(x, wm)  # [64,128,1,1] [128,128,1,1] -> [64,128,1,1]
-            decorrelated = decorrelated.permute(1, 0, 2, 3)  # -> [128,64,1,1]
-        else:
-            x = x.reshape(-1, dim, 1, 1)
-            decorrelated = conv2d(x, wm)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
-        return decorrelated
+        return wm
 
     def extra_repr(self):
         return "features={}, eps={}, momentum={}".format(

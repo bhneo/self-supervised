@@ -45,7 +45,7 @@ class WMSE(BaseMethod):
 
 if __name__ == "__main__":
     conf = cfg.get_cfg()
-    # conf.whiten = 'itn'
+    conf.whiten = 'pca'
     conf.w_dim = 0
 
     ds = datasets.get_ds(conf.dataset)(conf.bs, conf, conf.num_workers)

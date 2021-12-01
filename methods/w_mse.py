@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from .whitening import Whitening2dCholesky, Whitening2dIterNorm
+from .whitening import Whitening2dCholesky, Whitening2dIterNorm, Whitening2dZCA, Whitening2dPCA
 from .base import BaseMethod
 from .norm_mse import norm_mse_loss
 
@@ -13,7 +13,11 @@ class WMSE(BaseMethod):
         super().__init__(cfg)
         if cfg.whiten == 'itn':
             self.whitening = Whitening2dIterNorm(cfg.emb, eps=cfg.w_eps, track_running_stats=False, iterations=cfg.iter, dim=cfg.w_dim)
-        else:
+        elif cfg.whiten == 'zca':
+            self.whitening = Whitening2dZCA(cfg.emb, eps=cfg.w_eps, track_running_stats=False, dim=cfg.w_dim)
+        elif cfg.whiten == 'pca':
+            self.whitening = Whitening2dPCA(cfg.emb, eps=cfg.w_eps, track_running_stats=False, dim=cfg.w_dim)
+        elif cfg.whiten == 'qa':
             self.whitening = Whitening2dCholesky(cfg.emb, eps=cfg.w_eps, track_running_stats=False, dim=cfg.w_dim)
         self.loss_f = norm_mse_loss if cfg.norm else F.mse_loss
         self.w_iter = cfg.w_iter
