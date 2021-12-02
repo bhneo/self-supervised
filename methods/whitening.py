@@ -21,51 +21,60 @@ class Whitening2d(nn.Module):
             self.register_buffer("running_variance", torch.eye(self.num_features))
 
     def forward(self, x):
-            sigma_dim = x.size(self.axis)
+        assert self.axis in (0, 1), "axis must be in (0, 1) !"
+        w_dim = x.size(self.axis)
 
-            m = x.mean(self.axis)
-            m = m.view(sigma_dim, -1) if self.axis == 1 else m.view(-1, sigma_dim)
-            if not self.training and self.track_running_stats and self.axis==0:  # for inference
-                m = self.running_mean
-            xn = x - m  # [128, 64]
+        assert w_dim % self.group == 0, "The dim for whitening should be divisible by group !"
+
+        m = x.mean(0 if self.axis == 1 else 1)
+        m = m.view(-1, w_dim) if self.axis == 1 else m.view(w_dim, -1)
+        if not self.training and self.track_running_stats and self.axis == 1:  # for inference
+            m = self.running_mean
+        xn = x - m  # [128, 64]
+
+
+        sigma_dim = w_dim // self.group
+        eye = torch.eye(sigma_dim).type(xn.type())  # [128, 128] / [64, 64]
+        if self.axis == 1:
+            xn_g = xn.reshape(-1, self.group, sigma_dim)
+            xn_g = xn[:, start:start+sigma_dim]
+            f_cov = torch.mm(xn_g.permute(1, 0), xn_g) / (xn_g.shape[0] - 1)  # [64, 64]
+        else:
+            xn_g = xn[start:start + sigma_dim, :]
+            f_cov = torch.mm(xn_g, xn_g.permute(1, 0)) / (xn_g.shape[1] - 1)  # [128, 128]
+        sigma = (1 - self.eps) * f_cov + self.eps * eye
+
     
-            T = xn if self.axis == 1 else xn.permute(1, 0)  # [128, 64] / [64, 128]
-            f_cov = torch.mm(T, T.permute(1, 0)) / (T.shape[-1] - 1)  # [128, 128] / [64, 64]
+        if not self.training and self.track_running_stats:  # for inference
+            sigmas = self.running_variance
+
+        whiten_matrices = []
+        for i in range(self.group):
+            matrix = self.whiten_matrix(sigmas[i], eye)
+            matrix = matrix.reshape(sigma_dim, sigma_dim, 1, 1)
+            whiten_matrices.append(matrix)
     
-            eye = torch.eye(sigma_dim).type(f_cov.type())  # [128, 128] / [64, 64]
+        if self.axis == 1:
+            xn = xn.reshape(-1, sigma_dim, 1, 1)
+            decorrelated = conv2d(xn, wm)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
+        else:
+            xn = xn.permute(1, 0).reshape(-1, sigma_dim, 1, 1)
+            decorrelated = conv2d(xn, wm)  # [64,128,1,1] [128,128,1,1] -> [64,128,1,1]
+            decorrelated = decorrelated.permute(1, 0, 2, 3)  # -> [128,64,1,1]
     
-            if not self.training and self.track_running_stats:  # for inference
-                f_cov = self.running_variance
+        if self.training and self.track_running_stats and self.axis == 0:
+            self.running_mean = torch.add(
+                self.momentum * m.detach(),
+                (1 - self.momentum) * self.running_mean,
+                out=self.running_mean,
+            )
+            self.running_variance = torch.add(
+                self.momentum * f_cov.detach(),
+                (1 - self.momentum) * self.running_variance,
+                out=self.running_variance,
+            )
     
-            sigma = (1 - self.eps) * f_cov + self.eps * eye
-    
-            whiten_matrices = []
-            for _ in range(self.group):
-                matrix = self.whiten_matrix(sigma, eye)
-                matrix = matrix.reshape(sigma_dim, sigma_dim, 1, 1)
-                whiten_matrices.append(matrix)
-    
-            if self.axis == 1:
-                xn = xn.permute(1, 0).reshape(-1, sigma_dim, 1, 1)
-                decorrelated = conv2d(xn, wm)  # [64,128,1,1] [128,128,1,1] -> [64,128,1,1]
-                decorrelated = decorrelated.permute(1, 0, 2, 3)  # -> [128,64,1,1]
-            else:
-                xn = xn.reshape(-1, sigma_dim, 1, 1)
-                decorrelated = conv2d(xn, wm)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
-    
-            if self.training and self.track_running_stats and self.axis == 0:
-                self.running_mean = torch.add(
-                    self.momentum * m.detach(),
-                    (1 - self.momentum) * self.running_mean,
-                    out=self.running_mean,
-                )
-                self.running_variance = torch.add(
-                    self.momentum * f_cov.detach(),
-                    (1 - self.momentum) * self.running_variance,
-                    out=self.running_variance,
-                )
-    
-            return decorrelated.squeeze(2).squeeze(2)
+        return decorrelated.squeeze(2).squeeze(2)
 
     @abc.abstractmethod
     def whiten_matrix(self, sigma, eye):
