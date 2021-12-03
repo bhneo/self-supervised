@@ -34,33 +34,24 @@ class Whitening2d(nn.Module):
 
 
         sigma_dim = w_dim // self.group
-        eye = torch.eye(sigma_dim).type(xn.type())  # [128, 128] / [64, 64]
+        eye = torch.eye(sigma_dim).type(xn.type()).reshape(1, sigma_dim, sigma_dim).repeat(self.group, 1, 1)  # [128, 128] / [64, 64]
         if self.axis == 1:
-            xn_g = xn.reshape(-1, self.group, sigma_dim)
-            xn_g = xn[:, start:start+sigma_dim]
-            f_cov = torch.mm(xn_g.permute(1, 0), xn_g) / (xn_g.shape[0] - 1)  # [64, 64]
+            xn_g = xn.reshape(-1, self.group, sigma_dim).permute(1, 0, 2)  # [4, 128, 16]
         else:
-            xn_g = xn[start:start + sigma_dim, :]
-            f_cov = torch.mm(xn_g, xn_g.permute(1, 0)) / (xn_g.shape[1] - 1)  # [128, 128]
+            xn_g = xn.reshape(self.group, sigma_dim, -1).permute(0, 2, 1)  # [4, 64, 32]
+        f_cov = torch.bmm(xn_g.permute(0, 2, 1), xn_g) / (xn_g.shape[1] - 1)  # [4, 16, 128] * [4, 128, 16] -> [4, 16, 16] / [4, 32, 64] * [4, 64, 32] -> [4, 32, 32]
         sigma = (1 - self.eps) * f_cov + self.eps * eye
-
     
         if not self.training and self.track_running_stats:  # for inference
-            sigmas = self.running_variance
+            sigma = self.running_variance
 
-        whiten_matrices = []
-        for i in range(self.group):
-            matrix = self.whiten_matrix(sigmas[i], eye)
-            matrix = matrix.reshape(sigma_dim, sigma_dim, 1, 1)
-            whiten_matrices.append(matrix)
+        matrix = self.whiten_matrix(sigma, eye)  # [4, 16, 16] / [4, 32, 32]
+        decorrelated = torch.bmm(xn_g, matrix)  # [4, 128, 16] * [4, 16, 16] -> [4, 128, 16] / [4, 64, 32] * [4, 32, 32] -> [4, 64, 32]
     
         if self.axis == 1:
-            xn = xn.reshape(-1, sigma_dim, 1, 1)
-            decorrelated = conv2d(xn, wm)  # [128,64,1,1] [64,64,1,1] -> [128,64,1,1]
+            decorrelated = decorrelated.permute(1, 0, 2).reshape(-1, w_dim)
         else:
-            xn = xn.permute(1, 0).reshape(-1, sigma_dim, 1, 1)
-            decorrelated = conv2d(xn, wm)  # [64,128,1,1] [128,128,1,1] -> [64,128,1,1]
-            decorrelated = decorrelated.permute(1, 0, 2, 3)  # -> [128,64,1,1]
+            decorrelated = decorrelated.permute(0, 2, 1).reshape(w_dim, -1)
     
         if self.training and self.track_running_stats and self.axis == 0:
             self.running_mean = torch.add(
@@ -74,7 +65,7 @@ class Whitening2d(nn.Module):
                 out=self.running_variance,
             )
     
-        return decorrelated.squeeze(2).squeeze(2)
+        return decorrelated
 
     @abc.abstractmethod
     def whiten_matrix(self, sigma, eye):
@@ -87,7 +78,7 @@ class Whitening2d(nn.Module):
 
 
 class Whitening2dCholesky(Whitening2d):
-    def whiten_matrix(self, sigma, eye):  # x [128,64]
+    def whiten_matrix(self, sigma, eye):  # x [group, dim, dim]
         wm = torch.triangular_solve(
             eye, torch.cholesky(sigma), upper=False
         )[0]
@@ -98,7 +89,8 @@ class Whitening2dZCA(Whitening2d):
     def whiten_matrix(self, sigma, eye):
         u, eig, _ = sigma.svd()
         scale = eig.rsqrt()
-        wm = u.matmul(scale.diag()).matmul(u.t())
+        wm = torch.bmm(u, scale.diag())
+        wm = torch.bmm(wm, u.t())
         return wm
 
 
@@ -106,7 +98,7 @@ class Whitening2dPCA(Whitening2d):
     def whiten_matrix(self, sigma, eye):
         u, eig, _ = sigma.svd()
         scale = eig.rsqrt()
-        wm = u.matmul(scale.diag())
+        wm = torch.bmm(u, scale.diag())
         return wm
 
 
@@ -119,7 +111,7 @@ class Whitening2dIterNorm(Whitening2d):
         self.iterations = iterations
 
     def whiten_matrix(self, sigma, eye):
-        trace = sigma.trace().reshape(1, 1)
+        trace = sigma.trace().reshape(1, 1, 1)
         sigma_norm = sigma * trace.reciprocal()
 
         projection = eye
@@ -129,6 +121,10 @@ class Whitening2dIterNorm(Whitening2d):
         return wm
 
     def extra_repr(self):
-        return "features={}, eps={}, momentum={}".format(
-            self.num_features, self.eps, self.momentum
+        return "features={}, eps={}, momentum={}, axis={}, group={}, iterations={}".format(
+            self.num_features, self.eps, self.momentum, self.axis, self.group, self.iterations
         )
+
+
+if __name__ == "__main__":
+    pass
