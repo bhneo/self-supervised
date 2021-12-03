@@ -31,7 +31,6 @@ class Whitening2d(nn.Module):
             m = self.running_mean
         xn = x - m  # [128, 64]
 
-
         sigma_dim = w_dim // self.group
         eye = torch.eye(sigma_dim).type(xn.type()).reshape(1, sigma_dim, sigma_dim).repeat(self.group, 1, 1)  # [128, 128] / [64, 64]
         if self.axis == 1:
@@ -88,8 +87,8 @@ class Whitening2dZCA(Whitening2d):
     def whiten_matrix(self, sigma, eye):
         u, eig, _ = sigma.svd()
         scale = eig.rsqrt()
-        wm = torch.bmm(u, scale.diag())
-        wm = torch.bmm(wm, u.t())
+        wm = torch.bmm(u, torch.diag_embed(scale))
+        wm = torch.bmm(wm, u.permute(0, 2, 1))
         return wm
 
 
@@ -97,7 +96,7 @@ class Whitening2dPCA(Whitening2d):
     def whiten_matrix(self, sigma, eye):
         u, eig, _ = sigma.svd()
         scale = eig.rsqrt()
-        wm = torch.bmm(u, scale.diag())
+        wm = torch.bmm(u, torch.diag_embed(scale))
         return wm
 
 
@@ -126,4 +125,25 @@ class Whitening2dIterNorm(Whitening2d):
 
 
 if __name__ == "__main__":
-    pass
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    axis = 0
+    group = 4
+    data = torch.rand(128, 64)
+
+    whiten = Whitening2dZCA(axis=axis, group=group)
+    decor_data = whiten(data)
+
+    if axis == 1:
+        raw_cov = torch.mm(data.permute(1, 0), data)
+        decor_cov = torch.mm(decor_data.permute(1, 0), decor_data)
+    else:
+        raw_cov = torch.mm(data, data.permute(1, 0))
+        decor_cov = torch.mm(decor_data, decor_data.permute(1, 0))
+
+    plt.figure()
+    sns.heatmap(raw_cov)
+    plt.show()
+    sns.heatmap(decor_cov)
+    plt.show()
