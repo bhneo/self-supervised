@@ -12,12 +12,8 @@ class Whitening2d(nn.Module):
         self.eps = eps
         self.axis = axis
         self.group = group
-
-        if self.track_running_stats and self.axis == 0:
-            self.register_buffer(
-                "running_mean", torch.zeros([1, self.num_features, 1, 1])
-            )
-            self.register_buffer("running_variance", torch.eye(self.num_features))
+        self.running_mean_registered = False
+        self.running_variance_registered = False
 
     def forward(self, x):
         assert self.axis in (0, 1), "axis must be in (0, 1) !"
@@ -27,8 +23,15 @@ class Whitening2d(nn.Module):
 
         m = x.mean(0 if self.axis == 1 else 1)
         m = m.view(-1, w_dim) if self.axis == 1 else m.view(w_dim, -1)
-        if not self.training and self.track_running_stats and self.axis == 1:  # for inference
-            m = self.running_mean
+        if self.track_running_stats:
+            if not self.running_mean_registered:
+                self.register_buffer(
+                    "running_mean",
+                    torch.zeros_like(m)
+                )
+                self.running_mean_registered = True
+            if not self.training and self.axis == 1:  # for inference
+                m = self.running_mean
         xn = x - m  # [128, 64]
 
         sigma_dim = w_dim // self.group
@@ -39,9 +42,16 @@ class Whitening2d(nn.Module):
             xn_g = xn.reshape(self.group, sigma_dim, -1).permute(0, 2, 1)  # [4, 64, 32]
         f_cov = torch.bmm(xn_g.permute(0, 2, 1), xn_g) / (xn_g.shape[1] - 1)  # [4, 16, 128] * [4, 128, 16] -> [4, 16, 16] / [4, 32, 64] * [4, 64, 32] -> [4, 32, 32]
         sigma = (1 - self.eps) * f_cov + self.eps * eye
-    
-        if not self.training and self.track_running_stats:  # for inference
-            sigma = self.running_variance
+
+        if self.track_running_stats:
+            if not self.running_variance_registered:
+                self.register_buffer(
+                    "running_variance",
+                    torch.eye(sigma_dim).reshape(1, sigma_dim, sigma_dim).repeat(self.group, 1, 1)
+                )
+                self.running_variance_registered = True
+            if not self.training:  # for inference
+                sigma = self.running_variance
 
         matrix = self.whiten_matrix(sigma, eye)  # [4, 16, 16] / [4, 32, 32]
         decorrelated = torch.bmm(xn_g, matrix)  # [4, 128, 16] * [4, 16, 16] -> [4, 128, 16] / [4, 64, 32] * [4, 32, 32] -> [4, 64, 32]
@@ -101,20 +111,23 @@ class Whitening2dPCA(Whitening2d):
 
 
 class Whitening2dIterNorm(Whitening2d):
-    def __init__(self, momentum=0.01, track_running_stats=True, eps=0, axis=0, iterations=5):
+    def __init__(self, momentum=0.01, track_running_stats=True, eps=0, axis=0, group=1, iterations=5):
         super(Whitening2dIterNorm, self).__init__(momentum,
                                                   track_running_stats,
                                                   eps,
-                                                  axis)
+                                                  axis,
+                                                  group)
         self.iterations = iterations
 
     def whiten_matrix(self, sigma, eye):
-        trace = sigma.trace().reshape(1, 1, 1)
+        trace = sigma.diagonal(offset=0, dim1=-1, dim2=-2).sum(-1)
+        trace = trace.reshape(sigma.size(0), 1, 1)
         sigma_norm = sigma * trace.reciprocal()
 
         projection = eye
         for k in range(self.iterations):
-            projection = torch.baddbmm(1.5, projection, -0.5, torch.matrix_power(projection, 3), sigma_norm)
+            # projection = torch.baddbmm(1.5, projection, -0.5, torch.matrix_power(projection, 3), sigma_norm)
+            projection = torch.baddbmm(projection, torch.matrix_power(projection, 3), sigma_norm, beta=1.5, alpha=-0.5)
         wm = projection.mul_(trace.reciprocal().sqrt())
         return wm
 
@@ -128,11 +141,14 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    axis = 0
-    group = 4
+    axis = 1
+    group = 1
     data = torch.rand(128, 64)
 
-    whiten = Whitening2dZCA(axis=axis, group=group)
+    # whiten = Whitening2dZCA(axis=axis, group=group)
+    # whiten = Whitening2dPCA(axis=axis, group=group)
+    # whiten = Whitening2dCholesky(axis=axis, group=group)
+    whiten = Whitening2dIterNorm(axis=axis, group=group, iterations=5)
     decor_data = whiten(data)
 
     if axis == 1:
@@ -142,8 +158,9 @@ if __name__ == "__main__":
         raw_cov = torch.mm(data, data.permute(1, 0))
         decor_cov = torch.mm(decor_data, decor_data.permute(1, 0))
 
-    plt.figure()
+    plt.figure(figsize=(14, 5))
+    plt.subplot(1, 2, 1)
     sns.heatmap(raw_cov)
-    plt.show()
+    plt.subplot(1, 2, 2)
     sns.heatmap(decor_cov)
     plt.show()
