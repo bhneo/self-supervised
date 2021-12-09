@@ -36,7 +36,7 @@ python -m test --help
 To reproduce the results from [table 1](https://arxiv.org/abs/2007.06346):
 #### debug
 ```
-python -m train --dataset cifar10 --epoch 1000 --lr 3e-3 --num_samples 4 --bs 256 --emb 64 --w_size 128 --eval_every 5 --whiten zca
+python -m train --dataset cifar10 --epoch 200 --lr 3e-3 --num_samples 4 --bs 256 --emb 64 --w_size 128 --eval_every 5 --method w_mse_qr_v2 --group 4
 ```
 #### W-MSE 4
 ```
